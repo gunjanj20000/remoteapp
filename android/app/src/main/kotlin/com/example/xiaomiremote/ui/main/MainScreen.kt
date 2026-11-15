@@ -375,12 +375,15 @@ fun MainScreen(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val prefs = remember { context.getSharedPreferences("xiaomi_tv_remote_prefs", Context.MODE_PRIVATE) }
 
-    var tvIp by remember { mutableStateOf("192.168.1.100") }
+    var tvIp by remember { 
+        mutableStateOf(prefs.getString("saved_tv_ip", "192.68.1.38") ?: "192.68.1.38") 
+    }
     var isConnected by remember { mutableStateOf(false) }
     var connectionMethod by remember { mutableStateOf("Not Tested") }
     var latencyMs by remember { mutableStateOf<Long?>(null) }
-    var lastActionStatus by remember { mutableStateOf("Ready. Enter TV IP and connect.") }
+    var lastActionStatus by remember { mutableStateOf("Connecting to 192.68.1.38...") }
     var volume by remember { mutableStateOf(35) }
     var isMuted by remember { mutableStateOf(false) }
     var isPowerOn by remember { mutableStateOf(true) }
@@ -407,55 +410,74 @@ fun MainScreen(
     fun checkAndConnect(ip: String) {
         val cleanIp = ip.trim()
         if (cleanIp.isEmpty()) return
+        prefs.edit().putString("saved_tv_ip", cleanIp).apply()
 
         lastActionStatus = "Testing connection to $cleanIp..."
         coroutineScope.launch(Dispatchers.IO) {
             val start = System.currentTimeMillis()
             var connected = false
             var method = "None"
+            var activeIp = cleanIp
 
-            // 1. Check MiLink (TCP 6091) - Native Xiaomi Remote protocol
-            val hasMiLink = try {
-                Socket().use { s ->
-                    s.connect(InetSocketAddress(cleanIp, 6091), 800)
-                    true
-                }
-            } catch (_: Exception) { false }
-
-            // 2. Check DIAL (HTTP 8008) - Smart TV DIAL service
-            val hasDial = if (!hasMiLink) {
-                try {
+            // Helper to probe ports
+            fun probe(targetIp: String): Pair<Boolean, String> {
+                val hasMiLink = try {
                     Socket().use { s ->
-                        s.connect(InetSocketAddress(cleanIp, 8008), 800)
+                        s.connect(InetSocketAddress(targetIp, 6091), 700)
                         true
                     }
                 } catch (_: Exception) { false }
-            } else true
+                if (hasMiLink) return Pair(true, "MiLink (Port 6091)")
 
-            val elapsed = System.currentTimeMillis() - start
+                val hasDial = try {
+                    Socket().use { s ->
+                        s.connect(InetSocketAddress(targetIp, 8008), 700)
+                        true
+                    }
+                } catch (_: Exception) { false }
+                if (hasDial) return Pair(true, "DIAL (Port 8008)")
 
-            if (hasMiLink) {
-                connected = true
-                method = "MiLink (Native Port 6091)"
-            } else if (hasDial) {
-                connected = true
-                method = "DIAL Launcher (Port 8008)"
-            } else {
-                connected = false
-                method = "Unreachable"
+                return Pair(false, "Unreachable")
             }
 
+            // 1. Probe primary IP (192.68.1.38)
+            var (ok, meth) = probe(cleanIp)
+
+            // 2. If unreachable and cleanIp is 192.68.1.x, also probe 192.168.1.x (common typo tolerance)
+            if (!ok && cleanIp.startsWith("192.68.")) {
+                val altIp = cleanIp.replaceFirst("192.68.", "192.168.")
+                val (altOk, altMeth) = probe(altIp)
+                if (altOk) {
+                    ok = true
+                    meth = altMeth
+                    activeIp = altIp
+                }
+            }
+
+            connected = ok
+            method = meth
+            val elapsed = System.currentTimeMillis() - start
+
             withContext(Dispatchers.Main) {
+                if (activeIp != tvIp) {
+                    tvIp = activeIp
+                }
                 isConnected = connected
                 connectionMethod = method
                 latencyMs = if (connected) elapsed else null
                 lastActionStatus = if (connected) {
-                    "Connected to $cleanIp via $method (${elapsed}ms) ✅"
+                    prefs.edit().putString("saved_tv_ip", activeIp).apply()
+                    "Connected to $activeIp via $method (${elapsed}ms) ✅"
                 } else {
-                    "Cannot reach $cleanIp. Check IP and Wi-Fi/Ethernet."
+                    "Cannot reach $activeIp. Check TV IP and Wi-Fi/Ethernet."
                 }
             }
         }
+    }
+
+    // Auto-connect to TV on app launch immediately
+    LaunchedEffect(Unit) {
+        checkAndConnect(tvIp)
     }
 
     // Deep network diagnostics on TV IP
@@ -964,35 +986,46 @@ fun MainScreen(
         // Settings Dialog
         if (showSettingsDialog) {
             AlertDialog(
-                onDismissRequest = { showSettingsDialog = false },
+                onDismissRequest = { 
+                    prefs.edit().putString("saved_tv_ip", tvIp.trim()).apply()
+                    showSettingsDialog = false 
+                },
                 title = { Text("Xiaomi TV IP Setup") },
                 text = {
                     Column {
                         Text(
-                            "Enter the IP address of your Xiaomi TV (shown on TV under Settings → Network & Internet → Ethernet / Wi-Fi):",
+                            "Enter the IP address of your Xiaomi TV (always saved permanently):",
                             fontSize = 12.sp,
                             color = Color.Gray
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         OutlinedTextField(
                             value = tvIp,
-                            onValueChange = { tvIp = it },
-                            label = { Text("TV IP (e.g. 192.168.1.45)") },
+                            onValueChange = { 
+                                tvIp = it
+                                prefs.edit().putString("saved_tv_ip", it.trim()).apply()
+                            },
+                            label = { Text("TV IP (e.g. 192.68.1.38)") },
                             singleLine = true
                         )
                     }
                 },
                 confirmButton = {
                     Button(onClick = {
-                        checkAndConnect(tvIp)
+                        val clean = tvIp.trim()
+                        prefs.edit().putString("saved_tv_ip", clean).apply()
+                        checkAndConnect(clean)
                         showSettingsDialog = false
                     }) {
                         Text("Connect Now")
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { showSettingsDialog = false }) {
-                        Text("Cancel")
+                    TextButton(onClick = { 
+                        prefs.edit().putString("saved_tv_ip", tvIp.trim()).apply()
+                        showSettingsDialog = false 
+                    }) {
+                        Text("Close")
                     }
                 }
             )

@@ -18,7 +18,7 @@ const CONFIG_FILE = path.join(__dirname, 'tv-config.json');
 
 // Default initial configuration
 const DEFAULT_CONFIG = {
-  tvIp: '10.0.0.100', // Auto-detected or user configured
+  tvIp: '192.68.1.38', // Auto-detected or user configured
   tvName: 'Xiaomi Smart TV',
   tvMac: '',
   port: 5555,
