@@ -169,6 +169,52 @@ object DialClient {
     }
 }
 
+/**
+ * Direct ADB Socket Client (TCP Port 5555)
+ * Communicates with Android TV adbd daemon when "MiTV Adb debugging" is enabled.
+ */
+object AdbSocketClient {
+    fun sendKeyEvent(ip: String, keyCode: Int, timeoutMs: Int = 1000): Boolean {
+        var socket: Socket? = null
+        return try {
+            socket = Socket()
+            socket.connect(InetSocketAddress(ip, 5555), timeoutMs)
+            socket.soTimeout = timeoutMs
+            val out = socket.getOutputStream()
+            val cmd = "shell:input keyevent $keyCode"
+            val hexLen = String.format("%04X", cmd.length)
+            val packet = (hexLen + cmd).toByteArray(Charsets.UTF_8)
+            out.write(packet)
+            out.flush()
+            true
+        } catch (_: Exception) {
+            false
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+
+    fun launchApp(ip: String, packageName: String, activity: String, timeoutMs: Int = 1200): Boolean {
+        var socket: Socket? = null
+        return try {
+            socket = Socket()
+            socket.connect(InetSocketAddress(ip, 5555), timeoutMs)
+            socket.soTimeout = timeoutMs
+            val out = socket.getOutputStream()
+            val cmd = "shell:am start -n $packageName/$activity"
+            val hexLen = String.format("%04X", cmd.length)
+            val packet = (hexLen + cmd).toByteArray(Charsets.UTF_8)
+            out.write(packet)
+            out.flush()
+            true
+        } catch (_: Exception) {
+            false
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+}
+
 // Android Keycodes
 object TVKeyCodes {
     const val POWER = 26
@@ -357,33 +403,37 @@ fun MainScreen(
         }
     }
 
-    // Send command to TV via MiLink, Fallback HTTP or DIAL
+    // Send command to TV via MiLink, ADB socket or Fallback HTTP
     fun sendCommand(cmdName: String, keyCode: Int) {
         triggerHaptic()
         val currentIp = tvIp.trim()
 
         coroutineScope.launch(Dispatchers.IO) {
-            // 1. Primary: Send via Xiaomi Native MiLink (Port 6091)
-            val miLinkOk = MiLinkClient.sendKeyPress(currentIp, keyCode)
-            
-            // 2. Secondary fallback: Xiaomi HTTP port 6095
-            var httpOk = false
-            if (!miLinkOk) {
+            var sent = MiLinkClient.sendKeyPress(currentIp, keyCode)
+            var via = "MiLink (6091)"
+
+            // 2. Try ADB socket (Port 5555)
+            if (!sent) {
+                sent = AdbSocketClient.sendKeyEvent(currentIp, keyCode)
+                if (sent) via = "ADB (5555)"
+            }
+
+            // 3. Fallback: Xiaomi HTTP port 6095
+            if (!sent) {
                 try {
                     val url = URL("http://$currentIp:6095/controller?action=keyevent&keycode=${cmdName.lowercase()}")
                     val conn = url.openConnection() as HttpURLConnection
                     conn.connectTimeout = 600
                     conn.readTimeout = 600
-                    httpOk = conn.responseCode in 200..299
+                    sent = conn.responseCode in 200..299
                     conn.disconnect()
+                    if (sent) via = "MiTV HTTP (6095)"
                 } catch (_: Exception) {}
             }
 
             withContext(Dispatchers.Main) {
-                if (miLinkOk) {
-                    lastActionStatus = "Sent $cmdName via MiLink (6091) ✅"
-                } else if (httpOk) {
-                    lastActionStatus = "Sent $cmdName via MiTV HTTP (6095) ✅"
+                if (sent) {
+                    lastActionStatus = "Sent $cmdName via $via ✅"
                 } else {
                     lastActionStatus = "Command $cmdName failed. Check if TV is ON at $currentIp."
                 }
@@ -409,13 +459,20 @@ fun MainScreen(
 
         coroutineScope.launch(Dispatchers.IO) {
             var launched = false
+            var via = "DIAL (8008)"
 
             // 1. Try DIAL protocol (port 8008) - Supported by YouTube, Netflix, Prime Video
             if (dialName != null) {
                 launched = DialClient.launchApp(currentIp, dialName)
             }
 
-            // 2. Try Xiaomi HTTP startapp (port 6095)
+            // 2. Try ADB am start (port 5555)
+            if (!launched) {
+                launched = AdbSocketClient.launchApp(currentIp, packageName, ".MainActivity")
+                if (launched) via = "ADB (5555)"
+            }
+
+            // 3. Try Xiaomi HTTP startapp (port 6095)
             if (!launched) {
                 try {
                     val url = URL("http://$currentIp:6095/controller?action=startapp&packagename=$packageName")
@@ -424,12 +481,13 @@ fun MainScreen(
                     conn.readTimeout = 800
                     launched = conn.responseCode in 200..299
                     conn.disconnect()
+                    if (launched) via = "MiTV HTTP (6095)"
                 } catch (_: Exception) {}
             }
 
             withContext(Dispatchers.Main) {
                 lastActionStatus = if (launched) {
-                    "Launched $appName on TV! ✅"
+                    "Launched $appName on TV via $via! ✅"
                 } else {
                     "Dispatched $appName launch to $currentIp"
                 }
