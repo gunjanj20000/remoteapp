@@ -1,0 +1,17 @@
+{
+  "name": "Xiaomi TV Remote",
+  "short_name": "Mi Remote",
+  "description": "Wi-Fi Remote for Xiaomi Smart TV with YouTube, Netflix, Sony LIV & Prime Video shortcuts",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0a0b0e",
+  "theme_color": "#0a0b0e",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

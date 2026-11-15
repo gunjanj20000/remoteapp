@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  body {
+    background-color: #0c0e14;
+    color: #f3f4f6;
+    touch-action: manipulation;
+  }
+}
+
+/* Custom remote glass and tactile button effects */
+.remote-surface {
+  background: linear-gradient(180deg, #1b1e26 0%, #111319 100%);
+  box-shadow: 
+    0 25px 60px -15px rgba(0, 0, 0, 0.75),
+    inset 0 1px 1px rgba(255, 255, 255, 0.12),
+    inset 0 -1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.remote-btn {
+  transition: all 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 
+    0 4px 6px -1px rgba(0, 0, 0, 0.4),
+    0 2px 4px -2px rgba(0, 0, 0, 0.3),
+    inset 0 1px 1px rgba(255, 255, 255, 0.08);
+}
+
+.remote-btn:active {
+  transform: translateY(2px) scale(0.97);
+  box-shadow: 
+    0 1px 2px rgba(0, 0, 0, 0.6),
+    inset 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+
+/* D-Pad Circular Dial */
+.dpad-dial {
+  background: radial-gradient(circle at 50% 50%, #20242e 0%, #151821 100%);
+  box-shadow: 
+    0 10px 25px -5px rgba(0, 0, 0, 0.6),
+    inset 0 2px 3px rgba(255, 255, 255, 0.08),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.7);
+}
+
+/* Scrollbar styles for logs/modals */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #111319;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #272a34;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3f4452;
+}

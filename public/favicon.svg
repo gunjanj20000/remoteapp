@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <defs>
+    <linearGradient id="miOrange" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF7A00" />
+      <stop offset="100%" stop-color="#FF5000" />
+    </linearGradient>
+    <linearGradient id="bodyGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#2A2D34" />
+      <stop offset="100%" stop-color="#181A20" />
+    </linearGradient>
+  </defs>
+  <!-- Background squircle -->
+  <rect x="5" y="5" width="90" height="90" rx="24" fill="url(#miOrange)" />
+  <!-- TV Remote silhouette -->
+  <rect x="28" y="16" width="44" height="68" rx="12" fill="url(#bodyGrad)" stroke="#3f4450" stroke-width="2" />
+  <!-- Power indicator dot -->
+  <circle cx="50" cy="24" r="3" fill="#EF4444" />
+  <!-- D-Pad outer -->
+  <circle cx="50" cy="42" r="12" fill="#20232A" stroke="#4B5563" stroke-width="1.5" />
+  <!-- D-Pad center button -->
+  <circle cx="50" cy="42" r="5" fill="#374151" />
+  <!-- App shortcut buttons -->
+  <rect x="36" y="60" width="10" height="6" rx="2" fill="#E50914" />
+  <rect x="54" y="60" width="10" height="6" rx="2" fill="#FF0000" />
+  <rect x="36" y="70" width="10" height="6" rx="2" fill="#00A8E1" />
+  <rect x="54" y="70" width="10" height="6" rx="2" fill="#002D72" />
+</svg>
