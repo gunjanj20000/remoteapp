@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { Plus, Minus, VolumeX, Volume2, ChevronUp, ChevronDown, Hash } from 'lucide-react';
 import { playFeedback } from '../utils/feedback';
 
@@ -24,6 +24,41 @@ export const VolumeAndChannel: React.FC<VolumeAndChannelProps> = ({
     onSendCommand(cmd);
   };
 
+  // Hold-to-repeat hook
+  const createRepeatProps = (cmd: string) => {
+    const timerRef = { current: null as any };
+    const intervalRef = { current: null as any };
+
+    const start = (e: React.SyntheticEvent) => {
+      e.preventDefault();
+      handleAction(cmd);
+      timerRef.current = setTimeout(() => {
+        intervalRef.current = setInterval(() => {
+          handleAction(cmd);
+        }, 90);
+      }, 350);
+    };
+
+    const stop = () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      timerRef.current = null;
+      intervalRef.current = null;
+    };
+
+    return {
+      onMouseDown: start,
+      onMouseUp: stop,
+      onMouseLeave: stop,
+      onTouchStart: start,
+      onTouchEnd: stop,
+      onTouchCancel: stop
+    };
+  };
+
+  const volUpProps = createRepeatProps('VOLUME_UP');
+  const volDownProps = createRepeatProps('VOLUME_DOWN');
+
   return (
     <div className="w-full px-6 py-2">
       <div className="flex items-center justify-between gap-4">
@@ -31,9 +66,9 @@ export const VolumeAndChannel: React.FC<VolumeAndChannelProps> = ({
         <div className="flex-1 bg-zinc-900 border border-zinc-800 rounded-3xl p-1.5 flex flex-col items-center justify-between shadow-lg">
           {/* Volume Up */}
           <button
-            onClick={() => handleAction('VOLUME_UP')}
-            title="Volume Up"
-            className="w-full py-2.5 rounded-2xl flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 active:scale-95 transition-all"
+            {...volUpProps}
+            title="Volume Up (Keep pressed to repeat)"
+            className="w-full py-2.5 rounded-2xl flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 active:scale-95 transition-all select-none touch-none"
           >
             <Plus className="w-5 h-5" />
           </button>
@@ -53,9 +88,9 @@ export const VolumeAndChannel: React.FC<VolumeAndChannelProps> = ({
 
           {/* Volume Down */}
           <button
-            onClick={() => handleAction('VOLUME_DOWN')}
-            title="Volume Down"
-            className="w-full py-2.5 rounded-2xl flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 active:scale-95 transition-all"
+            {...volDownProps}
+            title="Volume Down (Keep pressed to repeat)"
+            className="w-full py-2.5 rounded-2xl flex items-center justify-center text-zinc-300 hover:text-white hover:bg-zinc-800 active:scale-95 transition-all select-none touch-none"
           >
             <Minus className="w-5 h-5" />
           </button>

@@ -143,14 +143,19 @@ const APP_SHORTCUTS = {
     name: 'YouTube',
     package: 'com.google.android.youtube.tv',
     activity: 'com.google.android.apps.youtube.tv.activity.ShellActivity',
-    dialName: 'YouTube',
+    dialNames: ['YouTube', 'YouTubeTV', 'YouTubeLeanback', 'com.google.android.youtube.tv'],
+    origin: 'https://www.youtube.com',
+    payload: 'v=',
+    xiaomiKeyCode: 190,
     uri: 'vnd.youtube:'
   },
   NETFLIX: {
     name: 'Netflix',
     package: 'com.netflix.ninja',
     activity: '.MainActivity',
-    dialName: 'Netflix',
+    dialNames: ['Netflix'],
+    origin: 'https://www.netflix.com',
+    xiaomiKeyCode: 193,
     uri: 'netflix://'
   },
   SONYLIV: {
@@ -158,34 +163,43 @@ const APP_SHORTCUTS = {
     package: 'com.sonyliv',
     fallbackPackage: 'com.graymatrix.did',
     activity: '.MainActivity',
-    dialName: 'SonyLIV',
+    dialNames: ['SonyLIV', 'SonyLiv', 'sonyliv', 'Sony_LIV', 'com.sonyliv'],
+    origin: 'https://www.sonyliv.com',
+    xiaomiKeyCode: 195,
     uri: 'sonyliv://'
   },
   PRIME_VIDEO: {
     name: 'Prime Video',
     package: 'com.amazon.amazonvideo.livingroom',
     activity: 'com.amazon.ignition.IgnitionActivity',
-    dialName: 'AmazonInstantVideo',
+    dialNames: ['AmazonPrimeVideo', 'PrimeVideo', 'AmazonVideo', 'AmazonInstantVideo', 'com.amazon.amazonvideo.livingroom'],
+    origin: 'https://www.primevideo.com',
+    xiaomiKeyCode: 194,
     uri: 'https://www.amazon.com/instant-video'
   },
   HOTSTAR: {
     name: 'Disney+ Hotstar',
     package: 'in.startv.hotstar',
     activity: '.MainActivity',
-    dialName: 'Hotstar',
+    dialNames: ['Hotstar'],
+    origin: 'https://www.hotstar.com',
+    xiaomiKeyCode: 195,
     uri: 'hotstar://'
   },
   SPOTIFY: {
     name: 'Spotify',
     package: 'com.spotify.tv.android',
     activity: '.MainActivity',
-    dialName: 'Spotify',
+    dialNames: ['Spotify'],
+    origin: 'https://www.spotify.com',
+    xiaomiKeyCode: 191,
     uri: 'spotify://'
   },
   PATCHWALL: {
     name: 'PatchWall Home',
     package: 'com.mitv.tvhome',
-    activity: '.MainActivity'
+    activity: '.MainActivity',
+    xiaomiKeyCode: 192
   }
 };
 
@@ -272,6 +286,10 @@ function runAdb(cmd, timeout = 3000) {
 // Execute HTTP request to TV (for Xiaomi native HTTP API port 6095 or DIAL port 8008)
 function sendHttpRequest(options, postData = '') {
   return new Promise((resolve) => {
+    const dataToWrite = postData || options.body || '';
+    if (dataToWrite && options.headers && !options.headers['Content-Length']) {
+      options.headers['Content-Length'] = Buffer.byteLength(dataToWrite);
+    }
     const req = http.request(options, (res) => {
       let body = '';
       res.on('data', chunk => body += chunk);
@@ -289,8 +307,8 @@ function sendHttpRequest(options, postData = '') {
       resolve({ success: false, error: 'HTTP Request Timeout' });
     });
 
-    if (postData) {
-      req.write(postData);
+    if (dataToWrite) {
+      req.write(dataToWrite);
     }
     req.end();
   });
@@ -727,20 +745,42 @@ app.post('/api/shortcut', async (req, res) => {
     }
   }
 
-  // DIAL Protocol execution (works for YouTube, Netflix, Prime Video on ALL Smart TVs with Chromecast)
-  if (shortcut && shortcut.dialName) {
-    const dialRes = await sendHttpRequest({
-      host: tvState.ip,
-      port: 8008,
-      path: `/apps/${shortcut.dialName}`,
-      method: 'POST'
-    });
-    if (dialRes.success || dialRes.statusCode === 200 || dialRes.statusCode === 303) {
+  // DIAL Protocol execution (Multi-candidate endpoints with origin & payload headers)
+  if (shortcut && (shortcut.dialNames || shortcut.dialName)) {
+    const dialNames = shortcut.dialNames || [shortcut.dialName];
+    for (const dialName of dialNames) {
+      const dialRes = await sendHttpRequest({
+        host: tvState.ip,
+        port: 8008,
+        path: `/apps/${dialName}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain; charset=utf-8',
+          ...(shortcut.origin ? { 'Origin': shortcut.origin } : {})
+        },
+        body: shortcut.payload || ''
+      });
+      if (dialRes.success || dialRes.statusCode === 200 || dialRes.statusCode === 201 || dialRes.statusCode === 303) {
+        return res.json({
+          success: true,
+          app: shortcut.name,
+          protocol: 'dial',
+          dialName,
+          statusCode: dialRes.statusCode
+        });
+      }
+    }
+  }
+
+  // Xiaomi MiLink OEM keycode fallback (e.g. 190=YouTube, 193=Netflix, 194=Prime, 195=Sony LIV)
+  if (shortcut && shortcut.xiaomiKeyCode) {
+    const ok = await sendMiLinkKeyPress(tvState.ip, shortcut.xiaomiKeyCode);
+    if (ok) {
       return res.json({
         success: true,
         app: shortcut.name,
-        protocol: 'dial',
-        statusCode: dialRes.statusCode
+        protocol: 'milink_key',
+        keyCode: shortcut.xiaomiKeyCode
       });
     }
   }
