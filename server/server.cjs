@@ -296,6 +296,80 @@ function sendHttpRequest(options, postData = '') {
   });
 }
 
+// MiLink binary key frame encoder for Xiaomi TV port 6091
+function buildMiLinkKeyFrame(id, keyCode, action) {
+  const tlvBuf = Buffer.alloc(5 * 8 + 9 * 2);
+  let pos = 0;
+  function writeI32(tag, val) {
+    tlvBuf.writeUInt8(tag, pos++);
+    tlvBuf.writeInt32BE(val, pos);
+    pos += 4;
+  }
+  function writeI64(tag, val) {
+    tlvBuf.writeUInt8(tag, pos++);
+    tlvBuf.writeInt32BE(val < 0 ? -1 : 0, pos);
+    pos += 4;
+    tlvBuf.writeInt32BE(val, pos);
+    pos += 4;
+  }
+  writeI32(1, 0); // metaState
+  writeI32(2, action); // 0=DOWN, 1=UP
+  writeI32(3, keyCode);
+  writeI32(4, 0); // scanCode
+  writeI32(5, 0); // repeatCount
+  writeI32(6, 0); // flags
+  writeI64(7, 0); // downTime = 0
+  writeI64(8, 0); // eventTime = 0
+  writeI32(10, -1); // deviceId = -1
+  writeI32(11, 0x101); // source = 0x101
+
+  const bodyLen = 1 + 4 + 2 + tlvBuf.length;
+  const frame = Buffer.alloc(1 + 2 + bodyLen);
+  frame.writeUInt8(4, 0); // FRAME_KEY = 4
+  frame.writeUInt16BE(bodyLen, 1);
+  frame.writeUInt8(1, 3); // code = 1 (send key)
+  frame.writeUInt32BE(id >>> 0, 4);
+  frame.writeUInt16BE(tlvBuf.length, 8);
+  tlvBuf.copy(frame, 10);
+  return frame;
+}
+
+function sendMiLinkKeyPress(ip, keyCode, timeout = 1200) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let resolved = false;
+    socket.setTimeout(timeout);
+
+    socket.on('connect', () => {
+      const id1 = Math.floor(Math.random() * 100000);
+      const downFrame = buildMiLinkKeyFrame(id1, keyCode, 0); // DOWN
+      socket.write(downFrame);
+
+      setTimeout(() => {
+        const id2 = id1 + 1;
+        const upFrame = buildMiLinkKeyFrame(id2, keyCode, 1); // UP
+        socket.write(upFrame);
+        setTimeout(() => {
+          socket.destroy();
+          if (!resolved) { resolved = true; resolve(true); }
+        }, 30);
+      }, 35);
+    });
+
+    socket.on('timeout', () => {
+      socket.destroy();
+      if (!resolved) { resolved = true; resolve(false); }
+    });
+
+    socket.on('error', () => {
+      socket.destroy();
+      if (!resolved) { resolved = true; resolve(false); }
+    });
+
+    socket.connect(6091, ip);
+  });
+}
+
 // Connect to TV immediately over Wi-Fi
 async function connectToTv(targetIp) {
   const ip = targetIp || config.tvIp;
@@ -307,7 +381,22 @@ async function connectToTv(targetIp) {
   const startTime = Date.now();
   addLog(`Attempting immediate Wi-Fi connection to Xiaomi TV at ${ip}...`, 'info');
 
-  // 1. Probe for ADB (port 5555)
+  // 1. Probe for Xiaomi Native MiLink (port 6091 - No pairing required!)
+  const isMiLinkOpen = await checkPortOpen(ip, 6091, 600);
+  if (isMiLinkOpen) {
+    const latency = Date.now() - startTime;
+    tvState.connected = true;
+    tvState.ip = ip;
+    tvState.protocol = 'milink';
+    tvState.latencyMs = latency;
+    tvState.lastPing = new Date().toISOString();
+    config.tvIp = ip;
+    saveConfig(config);
+    addLog(`Connected to Xiaomi TV (${ip}) via MiLink Protocol (port 6091) in ${latency}ms!`, 'success');
+    return { success: true, protocol: 'milink', latency };
+  }
+
+  // 2. Probe for ADB (port 5555)
   const isAdbPortOpen = await checkPortOpen(ip, 5555, 600);
   if (isAdbPortOpen) {
     addLog(`ADB port 5555 open on ${ip}. Connecting ADB daemon...`, 'info');
@@ -324,21 +413,6 @@ async function connectToTv(targetIp) {
     return { success: true, protocol: 'adb', latency, output: adbRes.stdout };
   }
 
-  // 2. Probe for Xiaomi MiTV HTTP API (port 6095)
-  const isMiTvHttpOpen = await checkPortOpen(ip, 6095, 600);
-  if (isMiTvHttpOpen) {
-    const latency = Date.now() - startTime;
-    tvState.connected = true;
-    tvState.ip = ip;
-    tvState.protocol = 'mitv_http';
-    tvState.latencyMs = latency;
-    tvState.lastPing = new Date().toISOString();
-    config.tvIp = ip;
-    saveConfig(config);
-    addLog(`Connected to Xiaomi TV (${ip}) via MiTV HTTP REST protocol in ${latency}ms!`, 'success');
-    return { success: true, protocol: 'mitv_http', latency };
-  }
-
   // 3. Probe for DIAL / Google Cast (port 8008)
   const isDialPortOpen = await checkPortOpen(ip, 8008, 600);
   if (isDialPortOpen) {
@@ -352,6 +426,21 @@ async function connectToTv(targetIp) {
     saveConfig(config);
     addLog(`Connected to Xiaomi TV (${ip}) via DIAL Cast protocol in ${latency}ms!`, 'success');
     return { success: true, protocol: 'dial', latency };
+  }
+
+  // 4. Probe for Xiaomi MiTV HTTP API (port 6095)
+  const isMiTvHttpOpen = await checkPortOpen(ip, 6095, 600);
+  if (isMiTvHttpOpen) {
+    const latency = Date.now() - startTime;
+    tvState.connected = true;
+    tvState.ip = ip;
+    tvState.protocol = 'mitv_http';
+    tvState.latencyMs = latency;
+    tvState.lastPing = new Date().toISOString();
+    config.tvIp = ip;
+    saveConfig(config);
+    addLog(`Connected to Xiaomi TV (${ip}) via MiTV HTTP REST protocol in ${latency}ms!`, 'success');
+    return { success: true, protocol: 'mitv_http', latency };
   }
 
   // 4. If offline or in demo environment, fallback to simulated connection so user can test the app
@@ -548,7 +637,18 @@ app.post('/api/command', async (req, res) => {
     tvState.muted = !tvState.muted;
   }
 
-  // 1. If TV is connected via ADB
+  // 1. If TV is connected via MiLink (port 6091 - Xiaomi Native, no pairing needed)
+  if (tvState.connected && (tvState.protocol === 'milink' || tvState.protocol === 'auto')) {
+    const keycode = ADB_KEYCODES[cmd];
+    if (keycode !== undefined) {
+      const ok = await sendMiLinkKeyPress(tvState.ip, keycode);
+      if (ok) {
+        return res.json({ success: true, command: cmd, protocol: 'milink', keycode });
+      }
+    }
+  }
+
+  // 2. If TV is connected via ADB
   if (tvState.connected && tvState.protocol === 'adb') {
     const keycode = ADB_KEYCODES[cmd];
     if (keycode !== undefined) {
@@ -557,7 +657,7 @@ app.post('/api/command', async (req, res) => {
     }
   }
 
-  // 2. If TV is connected via Xiaomi MiTV HTTP API
+  // 3. If TV is connected via Xiaomi MiTV HTTP API
   if (tvState.connected && tvState.protocol === 'mitv_http') {
     const mitvKey = MITV_KEY_MAP[cmd];
     if (mitvKey) {
@@ -627,20 +727,22 @@ app.post('/api/shortcut', async (req, res) => {
     }
   }
 
-  // DIAL Protocol execution (works for YouTube, Netflix, Prime Video without ADB)
-  if (tvState.connected && tvState.protocol === 'dial' && shortcut && shortcut.dialName) {
+  // DIAL Protocol execution (works for YouTube, Netflix, Prime Video on ALL Smart TVs with Chromecast)
+  if (shortcut && shortcut.dialName) {
     const dialRes = await sendHttpRequest({
       host: tvState.ip,
       port: 8008,
       path: `/apps/${shortcut.dialName}`,
       method: 'POST'
     });
-    return res.json({
-      success: true,
-      app: shortcut.name,
-      protocol: 'dial',
-      statusCode: dialRes.statusCode
-    });
+    if (dialRes.success || dialRes.statusCode === 200 || dialRes.statusCode === 303) {
+      return res.json({
+        success: true,
+        app: shortcut.name,
+        protocol: 'dial',
+        statusCode: dialRes.statusCode
+      });
+    }
   }
 
   // Xiaomi MiTV HTTP REST startapp
@@ -702,6 +804,26 @@ app.post('/api/config', (req, res) => {
   config = { ...config, ...req.body };
   saveConfig(config);
   res.json({ success: true, config });
+});
+
+// 10. Run Network Port Diagnostics
+app.post('/api/diagnose', async (req, res) => {
+  const ip = req.body.ip || tvState.ip;
+  const p6091 = await checkPortOpen(ip, 6091, 1000);
+  const p8008 = await checkPortOpen(ip, 8008, 1000);
+  const p5555 = await checkPortOpen(ip, 5555, 1000);
+  const p6466 = await checkPortOpen(ip, 6466, 1000);
+  const p6095 = await checkPortOpen(ip, 6095, 1000);
+  res.json({
+    ip,
+    ports: {
+      miLink_6091: p6091,
+      dial_8008: p8008,
+      adb_5555: p5555,
+      googleTv_6466: p6466,
+      mitvHttp_6095: p6095
+    }
+  });
 });
 
 // Serve frontend static files if built
