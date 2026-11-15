@@ -175,60 +175,145 @@ object MiLinkClient {
 }
 
 /**
- * Multi-strategy App Launcher (DIAL + Xiaomi MiLink OEM Keys + Port 6095)
+ * Google Cast V2 Protocol Client (TCP Port 8009 with TLS)
+ * Supported by all Android TVs (including Xiaomi TVs with Chromecast built-in).
+ * Sends official Cast launch frames for YouTube, Prime Video, and Sony LIV.
+ */
+object CastV2Client {
+    private fun encodeVarint(v: Int): ByteArray {
+        val out = ByteArrayOutputStream()
+        var value = v
+        while (value > 0x7f) {
+            out.write((value and 0x7f) or 0x80)
+            value = value ushr 7
+        }
+        out.write(value)
+        return out.toByteArray()
+    }
+
+    private fun encodeString(fieldNum: Int, str: String): ByteArray {
+        val bytes = str.toByteArray(Charsets.UTF_8)
+        val tag = (fieldNum shl 3) or 2
+        val out = ByteArrayOutputStream()
+        out.write(encodeVarint(tag))
+        out.write(encodeVarint(bytes.size))
+        out.write(bytes)
+        return out.toByteArray()
+    }
+
+    private fun buildCastMessage(sourceId: String, destId: String, namespace: String, payloadJson: String): ByteArray {
+        val body = ByteArrayOutputStream()
+        // 1: protocol_version = 0 (CASTV2_1_0)
+        body.write(byteArrayOf(0x08, 0x00))
+        // 2: source_id
+        body.write(encodeString(2, sourceId))
+        // 3: destination_id
+        body.write(encodeString(3, destId))
+        // 4: namespace
+        body.write(encodeString(4, namespace))
+        // 5: payload_type = 0 (STRING)
+        body.write(byteArrayOf(0x28, 0x00))
+        // 6: payload_utf8
+        body.write(encodeString(6, payloadJson))
+
+        val bodyBytes = body.toByteArray()
+        val frame = ByteArrayOutputStream()
+        val len = bodyBytes.size
+        frame.write((len ushr 24) and 0xff)
+        frame.write((len ushr 16) and 0xff)
+        frame.write((len ushr 8) and 0xff)
+        frame.write(len and 0xff)
+        frame.write(bodyBytes)
+        return frame.toByteArray()
+    }
+
+    fun launchApp(ip: String, appIds: List<String>, timeoutMs: Int = 1200): Boolean {
+        var socket: javax.net.ssl.SSLSocket? = null
+        return try {
+            val sslContext = javax.net.ssl.SSLContext.getInstance("TLS")
+            sslContext.init(null, arrayOf(object : javax.net.ssl.X509TrustManager {
+                override fun checkClientTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<java.security.cert.X509Certificate>?, authType: String?) {}
+                override fun getAcceptedIssuers(): Array<java.security.cert.X509Certificate> = arrayOf()
+            }), java.security.SecureRandom())
+
+            socket = sslContext.socketFactory.createSocket() as javax.net.ssl.SSLSocket
+            socket.connect(InetSocketAddress(ip, 8009), timeoutMs)
+            socket.soTimeout = timeoutMs
+
+            val out = socket.getOutputStream()
+
+            // 1. Send CONNECT message
+            val connMsg = buildCastMessage(
+                "sender-0",
+                "receiver-0",
+                "urn:x-cast:com.google.cast.tp.connection",
+                "{\"type\":\"CONNECT\",\"origin\":{}}"
+            )
+            out.write(connMsg)
+            out.flush()
+
+            Thread.sleep(40)
+
+            // 2. Send LAUNCH messages for candidate appIds
+            var reqId = 1
+            for (appId in appIds) {
+                val launchMsg = buildCastMessage(
+                    "sender-0",
+                    "receiver-0",
+                    "urn:x-cast:com.google.cast.receiver",
+                    "{\"type\":\"LAUNCH\",\"appId\":\"$appId\",\"requestId\":${reqId++}}"
+                )
+                out.write(launchMsg)
+                out.flush()
+                Thread.sleep(30)
+            }
+
+            true
+        } catch (_: Exception) {
+            false
+        } finally {
+            try { socket?.close() } catch (_: Exception) {}
+        }
+    }
+}
+
+/**
+ * Multi-protocol App Launcher (Cast V2 + DIAL)
  * Solves launching for YouTube, Netflix, Prime Video, Sony LIV.
+ * DOES NOT send any generic button keycodes to prevent unwanted Netflix takeovers.
  */
 object AppShortcutLauncher {
-    data class ShortcutTarget(
+    data class TargetConfig(
+        val name: String,
+        val castAppIds: List<String>,
         val dialNames: List<String>,
-        val origins: List<String>,
-        val payload: String?,
-        val keyCodes: List<Int>,
         val packageNames: List<String>
     )
 
     private val TARGETS = mapOf(
-        "YouTube" to ShortcutTarget(
-            dialNames = listOf("YouTube", "YouTubeTV", "YouTubeLeanback", "com.google.android.youtube.tv"),
-            origins = listOf("https://www.youtube.com", "https://www.google.com"),
-            payload = "v=",
-            keyCodes = listOf(190, 289, 297), // 190=Xiaomi remote YouTube, 289=VIDEO_APP_1
+        "YouTube" to TargetConfig(
+            name = "YouTube",
+            castAppIds = listOf("233637DE", "YouTube", "com.google.android.youtube.tv"),
+            dialNames = listOf("YouTube", "YouTubeTV"),
             packageNames = listOf("com.google.android.youtube.tv")
         ),
-        "Netflix" to ShortcutTarget(
+        "Netflix" to TargetConfig(
+            name = "Netflix",
+            castAppIds = listOf("CA5E8412", "Netflix", "com.netflix.ninja"),
             dialNames = listOf("Netflix"),
-            origins = listOf("https://www.netflix.com"),
-            payload = null,
-            keyCodes = listOf(193), // 193=Xiaomi remote Netflix
             packageNames = listOf("com.netflix.ninja")
         ),
-        "Prime Video" to ShortcutTarget(
-            dialNames = listOf(
-                "AmazonPrimeVideo",
-                "PrimeVideo",
-                "AmazonVideo",
-                "AmazonInstantVideo",
-                "com.amazon.amazonvideo.livingroom"
-            ),
-            origins = listOf("https://www.primevideo.com", "https://atv-ext.amazon.com"),
-            payload = null,
-            keyCodes = listOf(194, 290, 298), // 194=Xiaomi remote Prime Video, 290=VIDEO_APP_2
-            packageNames = listOf(
-                "com.amazon.amazonvideo.livingroom",
-                "com.amazon.avod.thirdpartyclient"
-            )
+        "Prime Video" to TargetConfig(
+            name = "Prime Video",
+            castAppIds = listOf("com.amazon.amazonvideo.livingroom", "AmazonPrimeVideo", "PrimeVideo"),
+            dialNames = listOf("AmazonPrimeVideo", "PrimeVideo", "AmazonVideo", "AmazonInstantVideo"),
+            packageNames = listOf("com.amazon.amazonvideo.livingroom", "com.amazon.avod.thirdpartyclient")
         ),
-        "Sony LIV" to ShortcutTarget(
-            dialNames = listOf(
-                "SonyLIV",
-                "SonyLiv",
-                "sonyliv",
-                "Sony_LIV",
-                "com.sonyliv"
-            ),
-            origins = listOf("https://www.sonyliv.com", "package:com.sonyliv"),
-            payload = null,
-            keyCodes = listOf(195, 191, 291, 299), // 195=Xiaomi remote Button 8, 191=Button 4
+        "Sony LIV" to TargetConfig(
+            name = "Sony LIV",
+            castAppIds = listOf("com.sonyliv", "SonyLIV", "SonyLiv"),
+            dialNames = listOf("SonyLIV", "SonyLiv", "sonyliv", "com.sonyliv"),
             packageNames = listOf("com.sonyliv")
         )
     )
@@ -236,27 +321,27 @@ object AppShortcutLauncher {
     fun launch(ip: String, appName: String): Pair<Boolean, String> {
         val target = TARGETS[appName] ?: return Pair(false, "Unknown shortcut")
 
-        // 1. Try DIAL endpoints
-        for (dialName in target.dialNames) {
-            for (origin in target.origins) {
-                if (tryDialPost(ip, dialName, origin, target.payload)) {
-                    return Pair(true, "DIAL ($dialName)")
-                }
+        // 1. Netflix works reliably via DIAL on port 8008
+        if (appName == "Netflix") {
+            if (tryDialPost(ip, "Netflix")) {
+                return Pair(true, "DIAL (Netflix)")
             }
-            if (tryDialPost(ip, dialName, null, target.payload)) {
+        }
+
+        // 2. Try Google Cast V2 (TLS port 8009) - Universal on Android TV / Chromecast
+        val castOk = CastV2Client.launchApp(ip, target.castAppIds)
+        if (castOk) {
+            return Pair(true, "Cast V2 (${target.castAppIds.first()})")
+        }
+
+        // 3. Try DIAL (HTTP port 8008)
+        for (dialName in target.dialNames) {
+            if (tryDialPost(ip, dialName)) {
                 return Pair(true, "DIAL ($dialName)")
             }
         }
 
-        // 2. Try Xiaomi Native MiLink OEM Keycodes
-        for (code in target.keyCodes) {
-            val ok = MiLinkClient.sendKeyPress(ip, code)
-            if (ok) {
-                return Pair(true, "MiLink Key ($code)")
-            }
-        }
-
-        // 3. Try Xiaomi TV HTTP startapp (port 6095)
+        // 4. Try Xiaomi TV HTTP startapp (port 6095)
         for (pkg in target.packageNames) {
             try {
                 val url = URL("http://$ip:6095/controller?action=startapp&packagename=$pkg")
@@ -274,23 +359,15 @@ object AppShortcutLauncher {
         return Pair(false, "Sent launch signal to $ip")
     }
 
-    private fun tryDialPost(ip: String, dialName: String, origin: String?, payload: String?): Boolean {
+    private fun tryDialPost(ip: String, dialName: String): Boolean {
         return try {
             val url = URL("http://$ip:8008/apps/$dialName")
             val conn = url.openConnection() as HttpURLConnection
             conn.requestMethod = "POST"
-            conn.connectTimeout = 900
-            conn.readTimeout = 900
-            conn.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
-            if (origin != null) {
-                conn.setRequestProperty("Origin", origin)
-            }
+            conn.connectTimeout = 1000
+            conn.readTimeout = 1000
             conn.doOutput = true
-
-            val body = (payload ?: "").toByteArray(Charsets.UTF_8)
-            conn.setFixedLengthStreamingMode(body.size)
-            conn.outputStream.use { it.write(body) }
-
+            conn.outputStream.close()
             val code = conn.responseCode
             conn.disconnect()
             code in 200..299 || code == 303

@@ -772,8 +772,8 @@ app.post('/api/shortcut', async (req, res) => {
     }
   }
 
-  // Xiaomi MiLink OEM keycode fallback (e.g. 190=YouTube, 193=Netflix, 194=Prime, 195=Sony LIV)
-  if (shortcut && shortcut.xiaomiKeyCode) {
+  // Xiaomi MiLink keycode fallback ONLY for Netflix (keycodes 190, 194, 195 on Xiaomi TV trigger Netflix!)
+  if (shortcut && key === 'NETFLIX' && shortcut.xiaomiKeyCode) {
     const ok = await sendMiLinkKeyPress(tvState.ip, shortcut.xiaomiKeyCode);
     if (ok) {
       return res.json({
